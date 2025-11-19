@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.DS_Store
+generate-icons.js
+package.json
+package-lock.json
+demo.html
