@@ -69,10 +69,23 @@ class AudioSplitterService {
         return;
       }
       
-      // Request tab audio capture
-      const stream = await chrome.tabCapture.capture({
-        audio: true,
-        video: false
+      // Verify tabCapture API exists before calling
+      if (!chrome.tabCapture || typeof chrome.tabCapture.capture !== 'function') {
+        // Inform caller that tabCapture is unavailable so it can fallback
+        throw new Error('tabCapture_unavailable');
+      }
+
+      // Request tab audio capture (wrap callback-style API)
+      const stream = await new Promise((resolve, reject) => {
+        try {
+          chrome.tabCapture.capture({ audio: true, video: false }, (s) => {
+            const err = chrome.runtime && chrome.runtime.lastError;
+            if (err) return reject(err);
+            resolve(s);
+          });
+        } catch (e) {
+          reject(e);
+        }
       });
       
       if (!stream) {
@@ -85,21 +98,25 @@ class AudioSplitterService {
       this.audioStreams.set(tabId, stream);
       
       // Create audio context for processing
-      const audioContext = new AudioContext();
-      this.audioContexts.set(tabId, audioContext);
-      
-      // Create source from stream
-      const source = audioContext.createMediaStreamSource(stream);
-      
-      // For now, just connect to destination (default output)
-      // In a full implementation, this would route to selected output
-      source.connect(audioContext.destination);
+      try {
+        const audioContext = new AudioContext();
+        this.audioContexts.set(tabId, audioContext);
+        // Create source from stream
+        const source = audioContext.createMediaStreamSource(stream);
+        // For now, just connect to destination (default output)
+        source.connect(audioContext.destination);
+      } catch (e) {
+        console.warn('Unable to create AudioContext in this context:', e);
+      }
       
       // Monitor stream end
-      stream.getAudioTracks()[0].onended = () => {
-        console.log(`Stream ended for tab ${tabId}`);
-        this.stopCapture(tabId);
-      };
+      const tracks = stream.getAudioTracks();
+      if (tracks && tracks[0]) {
+        tracks[0].onended = () => {
+          console.log(`Stream ended for tab ${tabId}`);
+          this.stopCapture(tabId);
+        };
+      }
       
     } catch (error) {
       console.error(`Error capturing tab ${tabId}:`, error);
@@ -120,7 +137,7 @@ class AudioSplitterService {
     // Close and remove audio context
     if (this.audioContexts.has(tabId)) {
       const context = this.audioContexts.get(tabId);
-      context.close();
+      try { context.close(); } catch (e) {}
       this.audioContexts.delete(tabId);
     }
   }
