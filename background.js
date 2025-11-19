@@ -11,8 +11,9 @@ class AudioSplitterBackground {
 		console.log('Audio Splitter background initialized');
 
 		browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
-			(async () => {
+				(async () => {
 				try {
+						console.log('Background received message:', request, 'from', sender && sender.tab ? sender.tab.id : sender);
 					if (request.action === 'captureTab') {
 						const tabId = request.tabId;
 						try {
@@ -51,7 +52,8 @@ class AudioSplitterBackground {
 					}
 
 					if (request.action === 'fallbackCaptureStarted') {
-						sendResponse({ success: true });
+									console.log('Background: fallback capture started (reported from capture page).');
+									sendResponse({ success: true });
 						return;
 					}
 

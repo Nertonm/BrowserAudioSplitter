@@ -159,6 +159,8 @@
 			}
 			if (!stream) throw new Error('No stream from tabCapture');
 			captureStream = stream;
+			// notify background that capture started (best-effort)
+			try { browser && browser.runtime && browser.runtime.sendMessage && browser.runtime.sendMessage({ action: 'captureStarted', tabId: requestedTabId || null }); } catch(e) { try { chrome && chrome.runtime && chrome.runtime.sendMessage && chrome.runtime.sendMessage({ action: 'captureStarted', tabId: requestedTabId || null }); } catch(_) {} }
 			setStatus('Captured via tabCapture');
 			const { leftStream, rightStream } = splitStereoStreamToDestinations(stream);
 			leftPreview.srcObject = leftStream;
@@ -211,6 +213,8 @@
 			setStatus('Starting fallback capture (user selection)...');
 			const stream = await navigator.mediaDevices.getDisplayMedia({ video: false, audio: true });
 			if (!stream) throw new Error('No stream returned from getDisplayMedia');
+			// notify background that fallback capture started
+			try { browser && browser.runtime && browser.runtime.sendMessage && browser.runtime.sendMessage({ action: 'fallbackCaptureStarted' }); } catch(e) { try { chrome && chrome.runtime && chrome.runtime.sendMessage && chrome.runtime.sendMessage({ action: 'fallbackCaptureStarted' }); } catch(_) {} }
 			// reuse split logic
 			const { leftStream, rightStream } = splitStereoStreamToDestinations(stream);
 			leftPreview.srcObject = leftStream;
