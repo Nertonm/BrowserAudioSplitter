@@ -7,7 +7,6 @@
     "storage",
     "tabs"
   ],
-  "optional_permissions": ["tabCapture"],
   "background": {
     "scripts": ["background-compat.js"],
     "persistent": true
