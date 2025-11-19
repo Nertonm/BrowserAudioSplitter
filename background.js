@@ -20,6 +20,39 @@ class AudioSplitterBackground {
 							if (browser.permissions && browser.permissions.request) {
 								await browser.permissions.request({ permissions: ['tabCapture'] }).catch(() => false);
 							}
+
+							if (request.action === 'captureStarted') {
+								console.log('Background: captureStarted reported from page', request);
+								sendResponse({ success: true });
+								return;
+							}
+
+							if (request.action === 'reportError') {
+								// store recent errors for debugging
+								try {
+									console.error('Reported capture error:', request);
+									const key = 'captureErrors';
+									let list = [];
+									if (browser && browser.storage && browser.storage.local) {
+										const data = await browser.storage.local.get(key);
+										list = (data && data[key]) || [];
+										list.unshift(request);
+										if (list.length > 50) list = list.slice(0, 50);
+										await browser.storage.local.set({ [key]: list });
+									} else if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+										chrome.storage.local.get(key, (data) => {
+											const prev = (data && data[key]) || [];
+											prev.unshift(request);
+											const trimmed = prev.slice(0, 50);
+											chrome.storage.local.set({ [key]: trimmed });
+										});
+									}
+								} catch (e) {
+									console.warn('Error storing reported error', e);
+								}
+								sendResponse({ success: true });
+								return;
+							}
 						} catch (permErr) {
 							console.warn('Permission request for tabCapture may be unsupported or denied', permErr);
 						}
