@@ -17,6 +17,27 @@
 
 	function setStatus(txt) { if (statusEl) statusEl.textContent = txt; }
 
+	function setError(msg) {
+		try {
+			const box = document.getElementById('errorBox');
+			const text = document.getElementById('errorText');
+			if (!box || !text) return;
+			text.textContent = msg || '';
+			box.style.display = msg ? 'block' : 'none';
+		} catch (e) { console.warn('setError failed', e); }
+	}
+
+	function reportErrorToBackground(err, context) {
+		const payload = {
+			action: 'reportError',
+			context: context || null,
+			message: err && err.message ? err.message : String(err),
+			stack: err && err.stack ? err.stack : null,
+			timestamp: new Date().toISOString()
+		};
+		try { browser && browser.runtime && browser.runtime.sendMessage && browser.runtime.sendMessage(payload); } catch (e) { try { chrome && chrome.runtime && chrome.runtime.sendMessage && chrome.runtime.sendMessage(payload); } catch (_) {} }
+	}
+
 	async function enumerateAudioOutputs() {
 		try {
 			const devices = await navigator.mediaDevices.enumerateDevices();
@@ -148,12 +169,16 @@
 					} catch (e) {
 						lastErr = e;
 						console.warn('tabCapture attempt failed for options', opts, e);
+						setError('tabCapture attempt failed: ' + (e && e.message ? e.message : String(e)));
+						reportErrorToBackground(e, { phase: 'tabCapture_attempt', options: opts });
 					}
 				}
 				if (!stream && lastErr) throw lastErr;
 			} catch (err) {
 				console.warn('tabCapture failed:', err);
 				setStatus('tabCapture failed: ' + (err && err.message ? err.message : err));
+				setError((err && err.message ? err.message : String(err)) + '\n\nSee background console for details.');
+				reportErrorToBackground(err, { phase: 'tabCapture_start' });
 				startBtn.disabled = false;
 				return;
 			}
@@ -162,6 +187,7 @@
 			// notify background that capture started (best-effort)
 			try { browser && browser.runtime && browser.runtime.sendMessage && browser.runtime.sendMessage({ action: 'captureStarted', tabId: requestedTabId || null }); } catch(e) { try { chrome && chrome.runtime && chrome.runtime.sendMessage && chrome.runtime.sendMessage({ action: 'captureStarted', tabId: requestedTabId || null }); } catch(_) {} }
 			setStatus('Captured via tabCapture');
+			setError('');
 			const { leftStream, rightStream } = splitStereoStreamToDestinations(stream);
 			leftPreview.srcObject = leftStream;
 			rightPreview.srcObject = rightStream;
@@ -175,6 +201,8 @@
 		} catch (err) {
 			console.error('startTabCapture error', err);
 			setStatus('Erro ao iniciar tabCapture: ' + (err && err.message ? err.message : err));
+			setError((err && err.message ? err.message : String(err)) + '\n\nSee background console for details.');
+			reportErrorToBackground(err, { phase: 'startTabCapture_catch' });
 			startBtn.disabled = false;
 		}
 	}
@@ -204,6 +232,8 @@
 		} catch (err) {
 			console.warn('stopCapture error', err);
 			setStatus('Erro ao parar captura');
+			setError((err && err.message ? err.message : String(err)));
+			reportErrorToBackground(err, { phase: 'stopCapture' });
 		}
 	}
 
@@ -225,8 +255,41 @@
 		} catch (err) {
 			console.error('Fallback capture failed', err);
 			setStatus('Fallback capture failed: ' + (err && err.message ? err.message : err));
+			setError((err && err.message ? err.message : String(err)) + "\n\nIf getDisplayMedia didn't show audio options, enable \"Share audio\" in the dialog.");
+			reportErrorToBackground(err, { phase: 'fallbackCapture' });
 		}
 	}
+
+	// wire copy button for error box
+	try {
+		const copyBtn = document.getElementById('copyErrorBtn');
+		if (copyBtn) {
+			copyBtn.addEventListener('click', async () => {
+				try {
+					const textEl = document.getElementById('errorText');
+					const txt = textEl ? textEl.textContent : '';
+					if (navigator.clipboard && navigator.clipboard.writeText) {
+						await navigator.clipboard.writeText(txt || '');
+						copyBtn.textContent = 'Copied';
+						setTimeout(() => { copyBtn.textContent = 'Copy error'; }, 1500);
+					} else {
+						// fallback: select and use execCommand
+						const range = document.createRange();
+						range.selectNodeContents(textEl);
+						const sel = window.getSelection();
+						sel.removeAllRanges();
+						sel.addRange(range);
+						document.execCommand('copy');
+						sel.removeAllRanges();
+						copyBtn.textContent = 'Copied';
+						setTimeout(() => { copyBtn.textContent = 'Copy error'; }, 1500);
+					}
+				} catch (e) {
+					console.warn('Copy failed', e);
+				}
+			});
+		}
+	} catch (e) { /* ignore */ }
 
 	startBtn.addEventListener('click', startTabCapture);
 	fallbackBtn && fallbackBtn.addEventListener('click', startFallbackCapture);
