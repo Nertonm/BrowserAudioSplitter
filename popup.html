@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Browser Audio Splitter</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🔊 Audio Splitter</h1>
+    </header>
+    
+    <div class="section">
+      <h2>Active Tabs</h2>
+      <div id="tabs-list" class="tabs-list">
+        <p class="empty-state">No audio tabs detected</p>
+      </div>
+    </div>
+    
+    <div class="section">
+      <h2>Audio Outputs</h2>
+      <div id="outputs-list" class="outputs-list">
+        <p class="loading">Loading audio devices...</p>
+      </div>
+    </div>
+    
+    <div class="actions">
+      <button id="refresh-btn" class="btn btn-primary">🔄 Refresh</button>
+      <button id="options-btn" class="btn btn-secondary">⚙️ Options</button>
+    </div>
+    
+    <footer>
+      <p class="info">Route audio from different tabs to separate outputs</p>
+    </footer>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
