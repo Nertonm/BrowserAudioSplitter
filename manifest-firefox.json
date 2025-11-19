@@ -1,0 +1,38 @@
+{
+  "manifest_version": 2,
+  "name": "Browser Audio Splitter",
+  "version": "1.0.1",
+  "description": "Split and route audio from different browser tabs to separate audio outputs",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "optional_permissions": ["tabCapture"],
+  "background": {
+    "scripts": ["background-compat.js"],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "options_page": "options.html",
+  "web_accessible_resources": ["capture.html", "capture.js"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "browser-audio-splitter@nertonm",
+      "strict_min_version": "91.0"
+    }
+  }
+}
