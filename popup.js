@@ -165,11 +165,22 @@ class AudioSplitterPopup {
         tabId: tabId
       });
       
-      if (response.success) {
+      if (response && response.success) {
         alert('Audio capture started for tab');
         await this.refresh();
       } else {
-        alert('Failed to capture audio: ' + (response.error || 'Unknown error'));
+        const err = response && response.error ? response.error : 'Unknown error';
+        // If tabCapture is unavailable, open capture.html so user can use the fallback getDisplayMedia
+        if (err === 'tabCapture_unavailable') {
+          try {
+            const url = chrome.runtime.getURL(`capture.html?tabId=${encodeURIComponent(tabId)}`);
+            await chrome.windows.create({ url, type: 'popup', height: 420, width: 660 });
+            return;
+          } catch (openErr) {
+            console.warn('Could not open capture page for fallback:', openErr);
+          }
+        }
+        alert('Failed to capture audio: ' + err);
       }
     } catch (error) {
       console.error('Error capturing tab:', error);

@@ -3,6 +3,7 @@
 (async function () {
 	const statusEl = document.getElementById('status');
 	const startBtn = document.getElementById('startBtn');
+	const fallbackBtn = document.getElementById('fallbackBtn');
 	const stopBtn = document.getElementById('stopBtn');
 	const leftSelect = document.getElementById('leftOutput');
 	const rightSelect = document.getElementById('rightOutput');
@@ -51,16 +52,43 @@
 	function splitStereoStreamToDestinations(stream) {
 		audioContext = new AudioContext();
 		const src = audioContext.createMediaStreamSource(stream);
-		const splitter = audioContext.createChannelSplitter(2);
-		src.connect(splitter);
+
+		// Detect channel count if available; fallback to 2
+		let channelCount = 2;
+		try {
+			const track = stream.getAudioTracks()[0];
+			if (track && typeof track.getSettings === 'function') {
+				const settings = track.getSettings();
+				if (settings && settings.channelCount) channelCount = settings.channelCount;
+			}
+		} catch (e) {
+			// ignore
+		}
+
 		destLeft = audioContext.createMediaStreamDestination();
 		destRight = audioContext.createMediaStreamDestination();
 		const gainLeft = audioContext.createGain();
 		const gainRight = audioContext.createGain();
-		splitter.connect(gainLeft, 0);
+
+		if (channelCount >= 2) {
+			const splitter = audioContext.createChannelSplitter(2);
+			src.connect(splitter);
+			splitter.connect(gainLeft, 0);
+			splitter.connect(gainRight, 1);
+		} else {
+			// Mono source: deliver same mono signal to both outputs
+			src.connect(gainLeft);
+			src.connect(gainRight);
+		}
+
 		gainLeft.connect(destLeft);
-		splitter.connect(gainRight, 1);
 		gainRight.connect(destRight);
+
+		// Ensure AudioContext resumed (autoplay policies)
+		if (audioContext.state === 'suspended' && typeof audioContext.resume === 'function') {
+			audioContext.resume().catch(() => {});
+		}
+
 		return { leftStream: destLeft.stream, rightStream: destRight.stream };
 	}
 
@@ -91,15 +119,38 @@
 			}
 			let stream;
 			try {
-				const maybe = captureApi.capture({ audio: true, video: false });
-				stream = maybe && typeof maybe.then === 'function' ? await maybe : await new Promise((res, rej) => {
+				// Try to capture the tab specified by ?tabId in the URL (background opens this page with that param)
+				const qs = new URLSearchParams(location.search);
+				const requestedTabId = qs.get('tabId');
+				const tryOptions = [{ audio: true, video: false }];
+				if (requestedTabId) {
+					const tid = parseInt(requestedTabId, 10);
+					if (!Number.isNaN(tid)) {
+						// try common option names used by implementations
+						tryOptions.unshift({ audio: true, video: false, targetTabId: tid });
+						tryOptions.unshift({ audio: true, video: false, tabId: tid });
+					}
+				}
+
+				let lastErr = null;
+				for (const opts of tryOptions) {
 					try {
-						captureApi.capture({ audio: true, video: false }, (s) => {
-							const err = (chrome && chrome.runtime && chrome.runtime.lastError) || null;
-							if (err) rej(err); else res(s);
+						const maybe = captureApi.capture(opts);
+						stream = maybe && typeof maybe.then === 'function' ? await maybe : await new Promise((res, rej) => {
+							try {
+								captureApi.capture(opts, (s) => {
+									const err = (chrome && chrome.runtime && chrome.runtime.lastError) || null;
+									if (err) rej(err); else res(s);
+								});
+							} catch (e) { rej(e); }
 						});
-					} catch (e) { rej(e); }
-				});
+						if (stream) break;
+					} catch (e) {
+						lastErr = e;
+						console.warn('tabCapture attempt failed for options', opts, e);
+					}
+				}
+				if (!stream && lastErr) throw lastErr;
 			} catch (err) {
 				console.warn('tabCapture failed:', err);
 				setStatus('tabCapture failed: ' + (err && err.message ? err.message : err));
@@ -154,8 +205,29 @@
 		}
 	}
 
+	async function startFallbackCapture() {
+		// user gesture required — uses getDisplayMedia so user can pick the tab/window
+		try {
+			setStatus('Starting fallback capture (user selection)...');
+			const stream = await navigator.mediaDevices.getDisplayMedia({ video: false, audio: true });
+			if (!stream) throw new Error('No stream returned from getDisplayMedia');
+			// reuse split logic
+			const { leftStream, rightStream } = splitStereoStreamToDestinations(stream);
+			leftPreview.srcObject = leftStream;
+			rightPreview.srcObject = rightStream;
+			await enumerateAudioOutputs();
+			stopBtn.disabled = false;
+			setStatus('Capturing (fallback getDisplayMedia) — left/right preview active');
+		} catch (err) {
+			console.error('Fallback capture failed', err);
+			setStatus('Fallback capture failed: ' + (err && err.message ? err.message : err));
+		}
+	}
+
 	startBtn.addEventListener('click', startTabCapture);
+	fallbackBtn && fallbackBtn.addEventListener('click', startFallbackCapture);
 	stopBtn.addEventListener('click', stopCapture);
 
 	await enumerateAudioOutputs();
 })();
+
