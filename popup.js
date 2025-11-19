@@ -23,7 +23,18 @@ class AudioSplitterPopup {
   async loadTabs() {
     try {
       const tabs = await chrome.tabs.query({});
-      const audioTabs = tabs.filter(tab => tab.audible || tab.url.includes('youtube.com') || tab.url.includes('spotify.com'));
+      const audioTabs = tabs.filter(tab => {
+        if (tab.audible) return true;
+        try {
+          const url = new URL(tab.url);
+          return url.hostname === 'youtube.com' || 
+                 url.hostname === 'www.youtube.com' || 
+                 url.hostname === 'spotify.com' ||
+                 url.hostname === 'www.spotify.com';
+        } catch {
+          return false;
+        }
+      });
       
       if (audioTabs.length === 0) {
         this.tabsList.innerHTML = '<p class="empty-state">No audio tabs detected</p>';
