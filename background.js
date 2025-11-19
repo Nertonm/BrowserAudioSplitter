@@ -2,7 +2,6 @@
 class AudioSplitterService {
   constructor() {
     this.audioStreams = new Map(); // tabId -> MediaStream
-    this.audioContexts = new Map(); // tabId -> AudioContext
     this.init();
   }
   
@@ -71,8 +70,25 @@ class AudioSplitterService {
       
       // Verify tabCapture API exists before calling
       if (!chrome.tabCapture || typeof chrome.tabCapture.capture !== 'function') {
-        // Inform caller that tabCapture is unavailable so it can fallback
+        // tabCapture unavailable (likely Firefox or permission not granted)
+        // Open capture.html in a new tab to handle capture in DOM context
+        console.log('tabCapture unavailable, opening capture page');
+        const captureUrl = chrome.runtime.getURL('capture.html');
+        await chrome.tabs.create({ url: captureUrl });
         throw new Error('tabCapture_unavailable');
+      }
+
+      // Request permission if needed (for optional_permissions)
+      try {
+        const hasPermission = await chrome.permissions.contains({ permissions: ['tabCapture'] });
+        if (!hasPermission) {
+          const granted = await chrome.permissions.request({ permissions: ['tabCapture'] });
+          if (!granted) {
+            throw new Error('tabCapture permission denied');
+          }
+        }
+      } catch (e) {
+        console.warn('Permission check/request failed:', e);
       }
 
       // Request tab audio capture (wrap callback-style API)
@@ -94,20 +110,8 @@ class AudioSplitterService {
       
       console.log(`Successfully captured audio from tab ${tabId}`);
       
-      // Store the stream
+      // Store the stream (Note: AudioContext not available in service workers)
       this.audioStreams.set(tabId, stream);
-      
-      // Create audio context for processing
-      try {
-        const audioContext = new AudioContext();
-        this.audioContexts.set(tabId, audioContext);
-        // Create source from stream
-        const source = audioContext.createMediaStreamSource(stream);
-        // For now, just connect to destination (default output)
-        source.connect(audioContext.destination);
-      } catch (e) {
-        console.warn('Unable to create AudioContext in this context:', e);
-      }
       
       // Monitor stream end
       const tracks = stream.getAudioTracks();
@@ -132,13 +136,6 @@ class AudioSplitterService {
       const stream = this.audioStreams.get(tabId);
       stream.getTracks().forEach(track => track.stop());
       this.audioStreams.delete(tabId);
-    }
-    
-    // Close and remove audio context
-    if (this.audioContexts.has(tabId)) {
-      const context = this.audioContexts.get(tabId);
-      try { context.close(); } catch (e) {}
-      this.audioContexts.delete(tabId);
     }
   }
   
