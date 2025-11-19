@@ -34,7 +34,7 @@
         } else {
           out[key] = val;
         }
-      } catch (e) { }
+      } catch (e) { /* ignore inaccessible properties */ }
     }
     return out;
   };

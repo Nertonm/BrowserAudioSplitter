@@ -1,157 +1,79 @@
-// Background service worker for audio routing
-class AudioSplitterService {
+// background.js - coordinator only (no AudioContext)
+try { importScripts('browser-shim.js'); } catch(e){ /* importScripts may not be available in some contexts */ }
+
+class AudioSplitterBackground {
   constructor() {
-    this.audioStreams = new Map(); // tabId -> MediaStream
+    this.capturingWindows = new Map(); // tabId -> windowId
     this.init();
   }
-  
+
   init() {
-    console.log('Browser Audio Splitter service worker initialized');
-    
-    // Listen for messages from popup
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      this.handleMessage(request, sender, sendResponse);
-      return true; // Keep channel open for async response
-    });
-    
-    // Listen for tab updates
-    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-      if (changeInfo.audible !== undefined) {
-        console.log(`Tab ${tabId} audio state changed: ${changeInfo.audible}`);
-      }
-    });
-    
-    // Listen for tab removal
-    chrome.tabs.onRemoved.addListener((tabId) => {
-      this.stopCapture(tabId);
-    });
-  }
-  
-  async handleMessage(request, sender, sendResponse) {
-    console.log('Received message:', request);
-    
-    try {
-      switch (request.action) {
-        case 'captureTab':
-          await this.captureTabAudio(request.tabId);
-          sendResponse({ success: true });
-          break;
-          
-        case 'stopCapture':
-          this.stopCapture(request.tabId);
-          sendResponse({ success: true });
-          break;
-          
-        case 'getStatus':
-          sendResponse({
-            success: true,
-            activeStreams: Array.from(this.audioStreams.keys())
-          });
-          break;
-          
-        default:
-          sendResponse({ success: false, error: 'Unknown action' });
-      }
-    } catch (error) {
-      console.error('Error handling message:', error);
-      sendResponse({ success: false, error: error.message });
-    }
-  }
-  
-  async captureTabAudio(tabId) {
-    try {
-      console.log(`Attempting to capture audio from tab ${tabId}`);
-      
-      // Check if already capturing
-      if (this.audioStreams.has(tabId)) {
-        console.log(`Already capturing audio from tab ${tabId}`);
-        return;
-      }
-      
-      // Verify tabCapture API exists before calling
-      if (!chrome.tabCapture || typeof chrome.tabCapture.capture !== 'function') {
-        // tabCapture unavailable (likely Firefox or permission not granted)
-        // Open capture.html in a new tab to handle capture in DOM context
-        console.log('tabCapture unavailable, opening capture page');
-        const captureUrl = chrome.runtime.getURL('capture.html');
-        await chrome.tabs.create({ url: captureUrl });
-        throw new Error('tabCapture_unavailable');
-      }
+    console.log('Audio Splitter background initialized');
 
-      // Request permission if needed (for optional_permissions)
-      try {
-        const hasPermission = await chrome.permissions.contains({ permissions: ['tabCapture'] });
-        if (!hasPermission) {
-          const granted = await chrome.permissions.request({ permissions: ['tabCapture'] });
-          if (!granted) {
-            throw new Error('tabCapture permission denied');
-          }
-        }
-      } catch (e) {
-        console.warn('Permission check/request failed:', e);
-      }
-
-      // Request tab audio capture (wrap callback-style API)
-      const stream = await new Promise((resolve, reject) => {
+    browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      (async () => {
         try {
-          chrome.tabCapture.capture({ audio: true, video: false }, (s) => {
-            const err = chrome.runtime && chrome.runtime.lastError;
-            if (err) return reject(err);
-            resolve(s);
-          });
-        } catch (e) {
-          reject(e);
+          if (request.action === 'captureTab') {
+            const tabId = request.tabId;
+            try {
+              if (browser.permissions && browser.permissions.request) {
+                await browser.permissions.request({ permissions: ['tabCapture'] }).catch(()=>false);
+              }
+            } catch (permErr) {
+              console.warn('Permission request for tabCapture may be unsupported or denied', permErr);
+            }
+
+            // If tabCapture exists in this environment, open capture page that will run tabCapture
+            if ((browser.tabCapture && typeof browser.tabCapture.capture === 'function') || (typeof chrome !== 'undefined' && chrome.tabCapture && typeof chrome.tabCapture.capture === 'function')) {
+              const url = browser.runtime.getURL(`capture.html?tabId=${encodeURIComponent(tabId)}`);
+              try {
+                const win = await browser.windows.create({ url, type: 'popup', height: 260, width: 360 });
+                if (win && win.id) this.capturingWindows.set(String(tabId), win.id);
+                sendResponse({ success: true });
+                return;
+              } catch (e) {
+                console.warn('Opening capture window failed:', e);
+                // fall through to inform caller
+              }
+            }
+
+            // If tabCapture not available here, inform caller to fallback (getDisplayMedia)
+            sendResponse({ success: false, error: 'tabCapture_unavailable' });
+            return;
+          }
+
+          if (request.action === 'stopCapture') {
+            const tabId = request.tabId;
+            const winId = this.capturingWindows.get(String(tabId));
+            if (winId !== undefined) {
+              try { await browser.windows.remove(winId); } catch(e) {}
+              this.capturingWindows.delete(String(tabId));
+            }
+            sendResponse({ success: true });
+            return;
+          }
+
+          if (request.action === 'fallbackCaptureStarted') {
+            // optional: track fallback state
+            sendResponse({ success: true });
+            return;
+          }
+
+          sendResponse({ success: false, error: 'unknown_action' });
+        } catch (err) {
+          console.error('Background handler error', err);
+          sendResponse({ success: false, error: err && err.message ? err.message : String(err) });
         }
-      });
-      
-      if (!stream) {
-        throw new Error('Failed to capture stream');
-      }
-      
-      console.log(`Successfully captured audio from tab ${tabId}`);
-      
-      // Store the stream (Note: AudioContext not available in service workers)
-      this.audioStreams.set(tabId, stream);
-      
-      // Monitor stream end
-      const tracks = stream.getAudioTracks();
-      if (tracks && tracks[0]) {
-        tracks[0].onended = () => {
-          console.log(`Stream ended for tab ${tabId}`);
-          this.stopCapture(tabId);
-        };
-      }
-      
-    } catch (error) {
-      console.error(`Error capturing tab ${tabId}:`, error);
-      throw error;
-    }
-  }
-  
-  stopCapture(tabId) {
-    console.log(`Stopping capture for tab ${tabId}`);
-    
-    // Stop and remove stream
-    if (this.audioStreams.has(tabId)) {
-      const stream = this.audioStreams.get(tabId);
-      stream.getTracks().forEach(track => track.stop());
-      this.audioStreams.delete(tabId);
-    }
-  }
-  
-  stopAllCaptures() {
-    console.log('Stopping all captures');
-    for (const tabId of this.audioStreams.keys()) {
-      this.stopCapture(tabId);
-    }
+      })();
+      return true; // keep channel open for async response
+    });
   }
 }
 
-// Initialize service worker
-const audioSplitter = new AudioSplitterService();
+const audioSplitter = new AudioSplitterBackground();
 
-// Handle extension lifecycle
-chrome.runtime.onSuspend.addListener(() => {
-  console.log('Service worker suspending, cleaning up...');
-  audioSplitter.stopAllCaptures();
-});
+if (browser.runtime && browser.runtime.onSuspend && browser.runtime.onSuspend.addListener) {
+  browser.runtime.onSuspend.addListener(() => {
+    console.log('Service worker suspending; cleanup may be needed.');
+  });
+}
