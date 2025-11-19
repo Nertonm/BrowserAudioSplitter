@@ -1,50 +1,52 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Capture & Split</title>
-  <style>
-    body{font-family:Arial,14px;margin:12px}
-    label{display:block;margin-top:8px}
-    select, button{margin-top:6px}
-    audio{display:block;margin-top:8px;width:100%}
-    .row{display:flex;gap:8px;align-items:center}
-    .col{flex:1}
-  </style>
-</head>
-<body>
-  <h3>Capture & Split (Left / Right)</h3>
-  <p id="status">Pronto</p>
-
-  <div class="row">
-    <div class="col">
-      <label>Left output device
-        <select id="leftOutput"></select>
-      </label>
-    </div>
-    <div class="col">
-      <label>Right output device
-        <select id="rightOutput"></select>
-      </label>
-    </div>
-  </div>
-
-  <div class="row">
-    <button id="startBtn">Start Capture</button>
-    <button id="stopBtn" disabled>Stop</button>
-  </div>
-
-  <p style="font-size:13px;color:#555;margin-top:8px">
-    Observação: alguns navegadores exigem permissão e suporte a setSinkId para enviar áudio a saídas específicas. Se seu navegador não suportar setSinkId, os canais serão reproduzidos no dispositivo padrão.
-  </p>
-
-  <h4>Previews</h4>
-  <label>Left preview</label>
-  <audio id="leftPreview" controls autoplay></audio>
-
-  <label>Right preview</label>
-  <audio id="rightPreview" controls autoplay></audio>
-
-  <script src="capture.js"></script>
-</body>
-</html>
+*** Add File: capture.html
++<!doctype html>
++<html>
++<head>
++  <meta charset="utf-8" />
++  <title>Capture & Split</title>
++  <style>
++    body{font-family:Arial,14px;margin:12px}
++    label{display:block;margin-top:8px}
++    select, button{margin-top:6px}
++    audio{display:block;margin-top:8px;width:100%}
++    .row{display:flex;gap:8px;align-items:center}
++    .col{flex:1}
++  </style>
++</head>
++<body>
++  <h3>Capture & Split (Left / Right)</h3>
++  <p id="status">Pronto</p>
++
++  <div class="row">
++    <div class="col">
++      <label>Left output device
++        <select id="leftOutput"></select>
++      </label>
++    </div>
++    <div class="col">
++      <label>Right output device
++        <select id="rightOutput"></select>
++      </label>
++    </div>
++  </div>
++
++  <div class="row">
++    <button id="startBtn">Start Capture (tabCapture)</button>
++    <button id="stopBtn" disabled>Stop</button>
++  </div>
++
++  <p style="font-size:13px;color:#555;margin-top:8px">
++    Observação: alguns navegadores exigem permissão e suporte a setSinkId para enviar áudio a saídas específicas. Se seu navegador não suportar setSinkId, os canais serão reproduzidos no dispositivo padrão.
++  </p>
++
++  <h4>Previews</h4>
++  <label>Left preview</label>
++  <audio id="leftPreview" controls autoplay></audio>
++
++  <label>Right preview</label>
++  <audio id="rightPreview" controls autoplay></audio>
++
++  <script src="capture.js"></script>
++</body>
++</html>
++

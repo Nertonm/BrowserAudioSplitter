@@ -1,0 +1,473 @@
+*** Begin Patch
+*** Add File: browser-shim.js
++// browser-shim.js
++// Lightweight shim: expõe `browser` em ambientes que só têm `chrome`
++// e tenta converter chamadas callback-style para Promises quando possível.
++// Recomendo migrar para webextension-polyfill para produção.
++(function () {
++  if (typeof browser !== "undefined") return;
++  if (typeof chrome === "undefined") { window.browser = {}; return; }
++
++  const wrap = (obj) => {
++    const out = {};
++    for (const key in obj) {
++      try {
++        const val = obj[key];
++        if (typeof val === "function") {
++          out[key] = (...args) => {
++            const last = args[args.length - 1];
++            const calledWithCallback = typeof last === "function";
++            if (calledWithCallback) return val.apply(obj, args);
++            return new Promise((resolve, reject) => {
++              try {
++                val.apply(obj, [
++                  ...args,
++                  (result) => {
++                    const err = chrome.runtime && chrome.runtime.lastError;
++                    if (err) reject(err);
++                    else resolve(result);
++                  },
++                ]);
++              } catch (e) { reject(e); }
++            });
++          };
++        } else if (typeof val === "object" && val !== null) {
++          out[key] = wrap(val);
++        } else {
++          out[key] = val;
++        }
++      } catch (e) { /* ignore inaccessible properties */ }
++    }
++    return out;
++  };
++
++  try { window.browser = wrap(chrome); } catch (e) { window.browser = chrome; }
++})();
++
+*** End Patch
+*** Begin Patch
+*** Add File: manifest.json
++{
++  "manifest_version": 3,
++  "name": "Browser Audio Splitter",
++  "version": "1.0.1",
++  "description": "Split and route audio from different browser tabs to separate audio outputs",
++  "permissions": [
++    "storage",
++    "tabs"
++  ],
++  "optional_permissions": [
++    "tabCapture"
++  ],
++  "background": {
++    "service_worker": "background.js",
++    "scripts": ["background-compat.js"]
++  },
++  "action": {
++    "default_popup": "popup.html",
++    "default_icon": {
++      "16": "icons/icon16.png",
++      "32": "icons/icon32.png",
++      "48": "icons/icon48.png",
++      "128": "icons/icon128.png"
++    }
++  },
++  "icons": {
++    "16": "icons/icon16.png",
++    "32": "icons/icon32.png",
++    "48": "icons/icon48.png",
++    "128": "icons/icon128.png"
++  },
++  "options_page": "options.html",
++  "web_accessible_resources": [
++    {
++      "resources": ["capture.html", "capture.js"],
++      "matches": ["<all_urls>"]
++    }
++  ],
++  "browser_specific_settings": {
++    "gecko": {
++      "id": "browser-audio-splitter@nertonm",
++      "strict_min_version": "91.0"
++    }
++  }
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: capture.html
++<!doctype html>
++<html>
++<head>
++  <meta charset="utf-8" />
++  <title>Capture & Split</title>
++  <style>
++    body{font-family:Arial,14px;margin:12px}
++    label{display:block;margin-top:8px}
++    select, button{margin-top:6px}
++    audio{display:block;margin-top:8px;width:100%}
++    .row{display:flex;gap:8px;align-items:center}
++    .col{flex:1}
++  </style>
++</head>
++<body>
++  <h3>Capture & Split (Left / Right)</h3>
++  <p id="status">Pronto</p>
++
++  <div class="row">
++    <div class="col">
++      <label>Left output device
++        <select id="leftOutput"></select>
++      </label>
++    </div>
++    <div class="col">
++      <label>Right output device
++        <select id="rightOutput"></select>
++      </label>
++    </div>
++  </div>
++
++  <div class="row">
++    <button id="startBtn">Start Capture (tabCapture)</button>
++    <button id="stopBtn" disabled>Stop</button>
++  </div>
++
++  <p style="font-size:13px;color:#555;margin-top:8px">
++    Observação: alguns navegadores exigem permissão e suporte a setSinkId para enviar áudio a saídas específicas. Se seu navegador não suportar setSinkId, os canais serão reproduzidos no dispositivo padrão.
++  </p>
++
++  <h4>Previews</h4>
++  <label>Left preview</label>
++  <audio id="leftPreview" controls autoplay></audio>
++
++  <label>Right preview</label>
++  <audio id="rightPreview" controls autoplay></audio>
++
++  <script src="capture.js"></script>
++</body>
++</html>
++
+*** End Patch
+*** Begin Patch
+*** Add File: capture.js
++// capture.js - captura via tabCapture (Chrome) e realiza split estéreo.
++// NOTE: NÃO chama getDisplayMedia automaticamente — isso evita bloqueios por falta de user gesture.
++// For fallback (Firefox), the popup will call getDisplayMedia (user gesture) and perform split there.
++(async function () {
++  const statusEl = document.getElementById('status');
++  const startBtn = document.getElementById('startBtn');
++  const stopBtn = document.getElementById('stopBtn');
++  const leftSelect = document.getElementById('leftOutput');
++  const rightSelect = document.getElementById('rightOutput');
++  const leftPreview = document.getElementById('leftPreview');
++  const rightPreview = document.getElementById('rightPreview');
++
++  let captureStream = null;
++  let audioContext = null;
++  let destLeft = null;
++  let destRight = null;
++
++  function setStatus(txt) { statusEl.textContent = txt; }
++
++  async function enumerateAudioOutputs() {
++    try {
++      const devices = await navigator.mediaDevices.enumerateDevices();
++      const outputs = devices.filter(d => d.kind === 'audiooutput');
++      [leftSelect, rightSelect].forEach(sel => {
++        sel.innerHTML = '';
++        const defaultOpt = document.createElement('option');
++        defaultOpt.value = 'default';
++        defaultOpt.textContent = 'Default device';
++        sel.appendChild(defaultOpt);
++      });
++      for (const d of outputs) {
++        const optL = document.createElement('option');
++        optL.value = d.deviceId;
++        optL.textContent = d.label || d.deviceId;
++        leftSelect.appendChild(optL);
++
++        const optR = document.createElement('option');
++        optR.value = d.deviceId;
++        optR.textContent = d.label || d.deviceId;
++        rightSelect.appendChild(optR);
++      }
++    } catch (err) {
++      console.warn('enumerateDevices failed', err);
++    }
++  }
++
++  function supportsSetSinkId(el) {
++    return !!(el && typeof el.setSinkId === 'function');
++  }
++
++  function splitStereoStreamToDestinations(stream) {
++    audioContext = new AudioContext();
++    const src = audioContext.createMediaStreamSource(stream);
++    const splitter = audioContext.createChannelSplitter(2);
++    src.connect(splitter);
++    destLeft = audioContext.createMediaStreamDestination();
++    destRight = audioContext.createMediaStreamDestination();
++    const gainLeft = audioContext.createGain();
++    const gainRight = audioContext.createGain();
++    splitter.connect(gainLeft, 0);
++    gainLeft.connect(destLeft);
++    splitter.connect(gainRight, 1);
++    gainRight.connect(destRight);
++    return { leftStream: destLeft.stream, rightStream: destRight.stream };
++  }
++
++  async function applySinkIdIfSupported(audioEl, deviceId) {
++    if (!audioEl) return;
++    if (deviceId === 'default') return;
++    if (supportsSetSinkId(audioEl)) {
++      try {
++        await audioEl.setSinkId(deviceId);
++        console.log('setSinkId OK for', deviceId);
++      } catch (err) {
++        console.warn('setSinkId failed', err);
++      }
++    } else {
++      console.warn('setSinkId not supported (audio will play on default device).');
++    }
++  }
++
++  async function startTabCapture() {
++    setStatus('Trying tabCapture...');
++    startBtn.disabled = true;
++    try {
++      const captureApi = (typeof browser !== 'undefined' && browser.tabCapture) ? browser.tabCapture : (typeof chrome !== 'undefined' ? chrome.tabCapture : null);
++      if (!captureApi || typeof captureApi.capture !== 'function') {
++        setStatus('tabCapture not available here');
++        startBtn.disabled = false;
++        return;
++      }
++      let stream;
++      try {
++        const maybe = captureApi.capture({ audio: true, video: false });
++        stream = maybe && typeof maybe.then === 'function' ? await maybe : await new Promise((res, rej) => {
++          try {
++            captureApi.capture({ audio: true, video: false }, (s) => {
++              const err = (chrome && chrome.runtime && chrome.runtime.lastError) || null;
++              if (err) rej(err); else res(s);
++            });
++          } catch (e) { rej(e); }
++        });
++      } catch (err) {
++        console.warn('tabCapture failed:', err);
++        setStatus('tabCapture failed: ' + (err && err.message ? err.message : err));
++        startBtn.disabled = false;
++        return;
++      }
++      if (!stream) throw new Error('No stream from tabCapture');
++      captureStream = stream;
++      setStatus('Captured via tabCapture');
++      const { leftStream, rightStream } = splitStereoStreamToDestinations(stream);
++      leftPreview.srcObject = leftStream;
++      rightPreview.srcObject = rightStream;
++      await enumerateAudioOutputs();
++      const leftDevice = leftSelect.value || 'default';
++      const rightDevice = rightSelect.value || 'default';
++      await applySinkIdIfSupported(leftPreview, leftDevice);
++      await applySinkIdIfSupported(rightPreview, rightDevice);
++      stopBtn.disabled = false;
++      setStatus('Capturing (tabCapture) — left/right preview active');
++    } catch (err) {
++      console.error('startTabCapture error', err);
++      setStatus('Erro ao iniciar tabCapture: ' + (err && err.message ? err.message : err));
++      startBtn.disabled = false;
++    }
++  }
++
++  function stopCapture() {
++    setStatus('Stopping capture...');
++    stopBtn.disabled = true;
++    startBtn.disabled = false;
++    try {
++      if (captureStream) {
++        captureStream.getTracks().forEach(t => t.stop());
++        captureStream = null;
++      }
++      if (leftPreview && leftPreview.srcObject) {
++        leftPreview.srcObject.getTracks().forEach(t => t.stop());
++        leftPreview.srcObject = null;
++      }
++      if (rightPreview && rightPreview.srcObject) {
++        rightPreview.srcObject.getTracks().forEach(t => t.stop());
++        rightPreview.srcObject = null;
++      }
++      if (audioContext) {
++        try { audioContext.close(); } catch(e) {}
++        audioContext = null;
++      }
++      setStatus('Stopped');
++    } catch (err) {
++      console.warn('stopCapture error', err);
++      setStatus('Erro ao parar captura');
++    }
++  }
++
++  startBtn.addEventListener('click', startTabCapture);
++  stopBtn.addEventListener('click', stopCapture);
++
++  await enumerateAudioOutputs();
++})();
++
+*** End Patch
+*** Begin Patch
+*** Add File: background.js
++// background.js - coordinator only (no AudioContext)
++try { importScripts('browser-shim.js'); } catch(e){ /* importScripts may not be available in some contexts */ }
++
++class AudioSplitterBackground {
++  constructor() {
++    this.capturingWindows = new Map(); // tabId -> windowId
++    this.init();
++  }
++
++  init() {
++    console.log('Audio Splitter background initialized');
++
++    browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
++      (async () => {
++        try {
++          if (request.action === 'captureTab') {
++            const tabId = request.tabId;
++            try {
++              if (browser.permissions && browser.permissions.request) {
++                await browser.permissions.request({ permissions: ['tabCapture'] }).catch(()=>false);
++              }
++            } catch (permErr) {
++              console.warn('Permission request for tabCapture may be unsupported or denied', permErr);
++            }
++
++            if ((browser.tabCapture && typeof browser.tabCapture.capture === 'function') || (typeof chrome !== 'undefined' && chrome.tabCapture && typeof chrome.tabCapture.capture === 'function')) {
++              const url = browser.runtime.getURL(`capture.html?tabId=${encodeURIComponent(tabId)}`);
++              try {
++                const win = await browser.windows.create({ url, type: 'popup', height: 360, width: 560 });
++                if (win && win.id) this.capturingWindows.set(String(tabId), win.id);
++                sendResponse({ success: true });
++                return;
++              } catch (e) {
++                console.warn('Opening capture window failed:', e);
++              }
++            }
++
++            sendResponse({ success: false, error: 'tabCapture_unavailable' });
++            return;
++          }
++
++          if (request.action === 'stopCapture') {
++            const tabId = request.tabId;
++            const winId = this.capturingWindows.get(String(tabId));
++            if (winId !== undefined) {
++              try { await browser.windows.remove(winId); } catch(e) {}
++              this.capturingWindows.delete(String(tabId));
++            }
++            sendResponse({ success: true });
++            return;
++          }
++
++          if (request.action === 'fallbackCaptureStarted') {
++            sendResponse({ success: true });
++            return;
++          }
++
++          sendResponse({ success: false, error: 'unknown_action' });
++        } catch (err) {
++          console.error('Background handler error', err);
++          sendResponse({ success: false, error: err && err.message ? err.message : String(err) });
++        }
++      })();
++      return true; // keep channel open for async response
++    });
++  }
++}
++
++const audioSplitter = new AudioSplitterBackground();
++
++if (browser.runtime && browser.runtime.onSuspend && browser.runtime.onSuspend.addListener) {
++  browser.runtime.onSuspend.addListener(() => {
++    console.log('Service worker suspending; cleanup may be needed.');
++  });
++}
++
+*** End Patch
+*** Begin Patch
+*** Add File: background-compat.js
++// background-compat.js - compatibility background script for Firefox (background page).
++(function () {
++  if (typeof browser === 'undefined' && typeof chrome !== 'undefined') {
++    window.browser = chrome;
++  }
++
++  class AudioSplitterBackgroundCompat {
++    constructor() {
++      this.capturingWindows = new Map(); // tabId -> windowId
++      this.init();
++    }
++
++    init() {
++      console.log('Audio Splitter background (compat) initialized');
++
++      browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
++        (async () => {
++          try {
++            if (request.action === 'captureTab') {
++              const tabId = request.tabId;
++              try {
++                if (browser.permissions && browser.permissions.request) {
++                  await browser.permissions.request({ permissions: ['tabCapture'] }).catch(()=>false);
++                }
++              } catch (permErr) {
++                console.warn('Permission request for tabCapture may be unsupported or denied', permErr);
++              }
++
++              if ((browser.tabCapture && typeof browser.tabCapture.capture === 'function') ||
++                  (typeof chrome !== 'undefined' && chrome.tabCapture && typeof chrome.tabCapture.capture === 'function')) {
++                const url = browser.runtime.getURL(`capture.html?tabId=${encodeURIComponent(tabId)}`);
++                try {
++                  const win = await browser.windows.create({ url, type: 'popup', height: 360, width: 560 });
++                  if (win && win.id) this.capturingWindows.set(String(tabId), win.id);
++                  sendResponse({ success: true });
++                  return;
++                } catch (e) {
++                  console.warn('Opening capture window failed:', e);
++                }
++              }
++
++              sendResponse({ success: false, error: 'tabCapture_unavailable' });
++              return;
++            }
++
++            if (request.action === 'stopCapture') {
++              const tabId = request.tabId;
++              const winId = this.capturingWindows.get(String(tabId));
++              if (winId !== undefined) {
++                try { await browser.windows.remove(winId); } catch(e) {}
++                this.capturingWindows.delete(String(tabId));
++              }
++              sendResponse({ success: true });
++              return;
++            }
++
++            if (request.action === 'fallbackCaptureStarted') {
++              sendResponse({ success: true });
++              return;
++            }
++
++            sendResponse({ success: false, error: 'unknown_action' });
++          } catch (err) {
++            console.error('Background (compat) handler error', err);
++            sendResponse({ success: false, error: err && err.message ? err.message : String(err) });
++          }
++        })();
++        return true;
++      });
++    }
++  }
++
++  new AudioSplitterBackgroundCompat();
++
++})();
++
+*** End Patch
